@@ -20,7 +20,13 @@ async Task RunAgentConversation()
     }
 
     var endpoint = new Uri(projectEndpoint);
-    AIProjectClient projectClient = new(endpoint, new DefaultAzureCredential());
+    var credential = new DefaultAzureCredential();
+    
+    // Get the access token for Azure Management API
+    var tokenRequestContext = new Azure.Core.TokenRequestContext(new[] { "https://management.azure.com/.default" });
+    var accessToken = await credential.GetTokenAsync(tokenRequestContext);
+    
+    AIProjectClient projectClient = new(endpoint, credential);
 
     PersistentAgentsClient agentsClient = projectClient.GetPersistentAgentsClient();
     PersistentAgent agent;
@@ -39,26 +45,59 @@ async Task RunAgentConversation()
 
     // Send initial message to the agent
     Console.Write("Please enter your prompt: ");
-    string inputPrompt = Console.ReadLine() ?? "Hello, Agent!";
+
+    string inputPrompt = Console.ReadLine() ?? $"Echo back message : {DateTime.Now.ToString()}.";
     PersistentThreadMessage messageResponse = agentsClient.Messages.CreateMessage(
         thread.Id,
         MessageRole.User,
         inputPrompt);
 
-    ThreadRun run = agentsClient.Runs.CreateRun(
-        thread.Id,
-        agent.Id);
+    // Create run with tool resources to pass the access token to MCP server
+    MCPToolResource mcpToolResource = new("azure");
+    mcpToolResource.UpdateHeader("Authorization", $"Bearer {accessToken.Token}");
+    mcpToolResource.RequireApproval = new MCPApproval("never");
+    ToolResources toolResources = mcpToolResource.ToToolResources();
+
+    ThreadRun run = agentsClient.Runs.CreateRun(thread, agent, toolResources);
 
     // Poll until the run reaches a terminal status
-    do
+    while (run.Status == RunStatus.Queued 
+        || run.Status == RunStatus.InProgress 
+        || run.Status == RunStatus.RequiresAction)
     {
         await Task.Delay(TimeSpan.FromMilliseconds(500));
         run = agentsClient.Runs.GetRun(thread.Id, run.Id);
+
+        // Handle MCP tool approval requests
+        if (run.Status == RunStatus.RequiresAction && run.RequiredAction is SubmitToolApprovalAction toolApprovalAction)
+        {
+            var toolApprovals = new List<ToolApproval>();
+            foreach (var toolCall in toolApprovalAction.SubmitToolApproval.ToolCalls)
+            {
+                if (toolCall is RequiredMcpToolCall mcpToolCall)
+                {
+                    Console.WriteLine($"Approving MCP tool call: {mcpToolCall.Name}");
+                    Console.WriteLine($"Arguments: {mcpToolCall.Arguments}");
+                    
+                    toolApprovals.Add(new ToolApproval(mcpToolCall.Id, approve: true)
+                    {
+                        Headers = { ["Authorization"] = $"Bearer {accessToken.Token}" }
+                    });
+                }
+            }
+
+            if (toolApprovals.Count > 0)
+            {
+                run = agentsClient.Runs.SubmitToolOutputsToRun(thread.Id, run.Id, toolApprovals: toolApprovals);
+            }
+        }
     }
-    while (run.Status == RunStatus.Queued
-        || run.Status == RunStatus.InProgress);
+    
     if (run.Status != RunStatus.Completed)
     {
+        Console.WriteLine("Run did not complete successfully.");
+        Console.WriteLine($"Run Status: {run.Status}");
+        Console.WriteLine($"Run Error: {run.LastError?.Message}");
         throw new InvalidOperationException($"Run failed or was canceled: {run.LastError?.Message}");
     }
 

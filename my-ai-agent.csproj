@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.1.0" />
+    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.6" />
     <PackageReference Include="Azure.AI.Projects" Version="1.1.0" />
     <PackageReference Include="Azure.Core" Version="1.49.0" />
     <PackageReference Include="Azure.Identity" Version="1.17.0" />
