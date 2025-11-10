@@ -2,6 +2,7 @@
 using Azure.Identity;
 using Azure.AI.Projects;
 using Azure.AI.Agents.Persistent;
+using System.Net.Http.Headers;
 
 async Task RunAgentConversation()
 {
@@ -55,6 +56,13 @@ async Task RunAgentConversation()
     // Create run with tool resources to pass the access token to MCP server
     MCPToolResource mcpToolResource = new("azure");
     mcpToolResource.UpdateHeader("Authorization", $"Bearer {accessToken.Token}");
+
+    // Add the session ID header if available
+    if (!string.IsNullOrEmpty(thread.Id))
+    {
+        mcpToolResource.UpdateHeader("x-custom-thread-id", thread.Id);
+    }
+    
     mcpToolResource.RequireApproval = new MCPApproval("never");
     ToolResources toolResources = mcpToolResource.ToToolResources();
 
@@ -81,7 +89,12 @@ async Task RunAgentConversation()
                     
                     toolApprovals.Add(new ToolApproval(mcpToolCall.Id, approve: true)
                     {
-                        Headers = { ["Authorization"] = $"Bearer {accessToken.Token}" }
+                        // Add the session ID and the authorization header
+                        Headers = 
+                        {
+                            ["x-custom-thread-id"] = thread.Id,
+                            ["Authorization"] = $"Bearer {accessToken.Token}"
+                        }
                     });
                 }
             }
